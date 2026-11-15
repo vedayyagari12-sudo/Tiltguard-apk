@@ -26,11 +26,12 @@ import android.view.WindowManager;
 import android.content.ComponentName;
 
 /**
- * Keeps a full-screen black overlay on top of everything and fades it in when
- * the phone is tilted away from the angle the user was holding it at.
+ * Software privacy filter. One overlay window (ShadeView) models a micro-louver film:
+ * brightness falls off with viewing angle and is black past the cutoff angle.
  *
- * Tilt is measured with the gyro-fused "game rotation vector" sensor (falls
- * back to the plain rotation vector, then to the accelerometer).
+ * The viewing angle comes from the front camera when face check is on (where your face
+ * actually is relative to the screen), otherwise from how far the phone has been tilted
+ * away from the position you were holding it in.
  */
 public class PrivacyService extends Service implements SensorEventListener {
 
@@ -38,16 +39,19 @@ public class PrivacyService extends Service implements SensorEventListener {
     public static final String ACTION_RECALIBRATE = "com.vaapps.tiltguard.RECALIBRATE";
 
     static final String PREFS = "tiltguard";
-    static final String KEY_SENSITIVITY = "sensitivity"; // degrees of free tilt
-    static final int DEFAULT_SENSITIVITY = 20;
+    static final String KEY_SENSITIVITY = "cutoff_angle"; // degrees off-centre where it goes black
+    static final int DEFAULT_SENSITIVITY = 30;
+    static final String KEY_LOUVERS = "louvers";
+    static final String KEY_FOURWAY = "four_way";
     static final String KEY_FACE = "face_check";
     static final String KEY_MULTI = "multi_face";
-    static final String KEY_SIDES = "side_width"; // percent of screen width per side
-    static final int DEFAULT_SIDES = 15;
+    static final String KEY_SIDES = "edge_shade"; // how dark the edges are, percent
+    static final int DEFAULT_SIDES = 40;
 
     private static final String CHANNEL_ID = "privacy";
     private static final int NOTIF_ID = 1;
-    private static final float FADE_RANGE_DEG = 14f; // degrees from "clear" to "fully dark"
+    private static final float TOUCH_ALPHA = 0.8f;   // Android passes touches through up to this
+    private static final long FACE_POS_FRESH_MS = 800;
     private static final long NO_FACE_GRACE_MS = 1500; // black out after this long without a face
     private static final long MULTI_FACE_HOLD_MS = 1200;
     private static final long FACE_RETRY_MS = 5000;
@@ -58,21 +62,24 @@ public class PrivacyService extends Service implements SensorEventListener {
     static volatile boolean multiFace = true;
     static volatile boolean faceActive = false; // camera actually running
     static volatile int sidePercent = DEFAULT_SIDES;
+    static volatile boolean louvers = true;
+    static volatile boolean fourWay = false;
 
     private WindowManager windowManager;
-    private View shade;                       // full-screen black, fades in
+    private ShadeView shade;
     private WindowManager.LayoutParams shadeParams;
-    private ShadeView leftBand, rightBand;    // always-on black edges
-    private WindowManager.LayoutParams leftParams, rightParams;
-    private int appliedBandPx = -1;
+    private boolean opaque = false;           // window at full alpha (touches blocked)
     private SensorManager sensorManager;
     private boolean usingRotationVector;
 
     private final float[] rotation = new float[9];
     private final float[] gravity = new float[3];
     private float[] baseline;           // "looking straight at it" direction
-    private float sides = 0f;
+    private float kx = 0f, ky = 0f;     // eased viewing angle / cutoff, phone axes
     private float full = 0f;
+    private volatile float faceTx, faceTy;
+    private volatile long lastFacePosTime;
+    private float[] faceBase;           // where your face sits when looking straight on
 
     private FaceWatcher faceWatcher;
     private volatile long lastFaceTime;
@@ -114,6 +121,8 @@ public class PrivacyService extends Service implements SensorEventListener {
         faceCheck = p.getBoolean(KEY_FACE, true);
         multiFace = p.getBoolean(KEY_MULTI, true);
         sidePercent = p.getInt(KEY_SIDES, DEFAULT_SIDES);
+        louvers = p.getBoolean(KEY_LOUVERS, true);
+        fourWay = p.getBoolean(KEY_FOURWAY, false);
     }
 
     @Override
@@ -144,6 +153,7 @@ public class PrivacyService extends Service implements SensorEventListener {
         }
         if (ACTION_RECALIBRATE.equals(action)) {
             baseline = null; // next sensor reading becomes the new "straight on" angle
+            faceBase = null;
         }
         return START_STICKY;
     }
@@ -155,9 +165,7 @@ public class PrivacyService extends Service implements SensorEventListener {
         mainHandler.removeCallbacksAndMessages(null);
         if (faceWatcher != null) faceWatcher.stop();
         if (sensorManager != null) sensorManager.unregisterListener(this);
-        for (View v : new View[]{shade, leftBand, rightBand}) {
-            if (v != null && v.isAttachedToWindow()) windowManager.removeView(v);
-        }
+        if (shade != null && shade.isAttachedToWindow()) windowManager.removeView(shade);
         refreshTile();
         super.onDestroy();
     }
@@ -171,24 +179,9 @@ public class PrivacyService extends Service implements SensorEventListener {
 
     private void addShade() {
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        shade = new View(this);
-        shade.setBackgroundColor(android.graphics.Color.BLACK);
-        shadeParams = overlayParams(WindowManager.LayoutParams.MATCH_PARENT, android.view.Gravity.FILL);
-        shadeParams.alpha = 0f;
-        windowManager.addView(shade, shadeParams);
-
-        leftBand = new ShadeView(this, true);
-        leftParams = overlayParams(1, android.view.Gravity.START | android.view.Gravity.FILL_VERTICAL);
-        windowManager.addView(leftBand, leftParams);
-
-        rightBand = new ShadeView(this, false);
-        rightParams = overlayParams(1, android.view.Gravity.END | android.view.Gravity.FILL_VERTICAL);
-        windowManager.addView(rightBand, rightParams);
-    }
-
-    private WindowManager.LayoutParams overlayParams(int width, int gravity) {
-        WindowManager.LayoutParams p = new WindowManager.LayoutParams(
-                width,
+        shade = new ShadeView(this);
+        shadeParams = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
@@ -196,52 +189,63 @@ public class PrivacyService extends Service implements SensorEventListener {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
-        p.gravity = gravity;
+        shadeParams.alpha = TOUCH_ALPHA;
         if (Build.VERSION.SDK_INT >= 28) {
-            p.layoutInDisplayCutoutMode =
+            shadeParams.layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
-        return p;
+        windowManager.addView(shade, shadeParams);
     }
 
     /**
-     * sidesV 0..1: how far past the normal edge bands the sides have closed in (tilt).
-     * fullV  0..1: black over the whole screen (no face / tilted all the way).
-     *
-     * The edge bands are their own narrow windows at full opacity, so they're truly black
-     * while taps in the middle of the screen still go through to your apps.
+     * kxDev / kyDev: viewing angle as a fraction of the cutoff, along the phone's own
+     * x (short) and y (long) axes. fullV: black over everything.
      */
-    private void applyShade(float sidesV, float fullV) {
+    private void applyShade(float kxDev, float kyDev, float fullV) {
         if (shade == null) return;
-        int curW = getResources().getDisplayMetrics().widthPixels;
-        float base = sidePercent / 100f;
-        float frac = base + (0.55f - base) * sidesV;      // grows to just past half: bands meet
-        int bandPx = Math.max(1, Math.round(curW * frac));
-        if (bandPx != appliedBandPx) {
-            appliedBandPx = bandPx;
-            leftParams.width = bandPx;
-            rightParams.width = bandPx;
-            float a = (sidePercent == 0 && sidesV <= 0.001f) ? 0f : 1f;
-            leftParams.alpha = a;
-            rightParams.alpha = a;
-            windowManager.updateViewLayout(leftBand, leftParams);
-            windowManager.updateViewLayout(rightBand, rightParams);
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        float edge = sidePercent / 100f;
+        float aspect = (float) Math.max(dm.widthPixels, dm.heightPixels)
+                / Math.max(1, Math.min(dm.widthPixels, dm.heightPixels));
+        float sxDev = edge;                         // louvers run along the phone's long axis
+        float syDev = fourWay ? edge * aspect : 0f;
+        if (!fourWay) kyDev = 0f;
+
+        // Phone axes -> what is currently "across" and "down" on the display.
+        float a, b, sa, sb;
+        int rot = windowManager.getDefaultDisplay().getRotation();
+        switch (rot) {
+            case android.view.Surface.ROTATION_90:  a = kyDev;  b = kxDev;  sa = syDev; sb = sxDev; break;
+            case android.view.Surface.ROTATION_180: a = -kxDev; b = kyDev;  sa = sxDev; sb = syDev; break;
+            case android.view.Surface.ROTATION_270: a = -kyDev; b = -kxDev; sa = syDev; sb = sxDev; break;
+            default:                                a = kxDev;  b = -kyDev; sa = sxDev; sb = syDev;
         }
-        if (Math.abs(fullV - shadeParams.alpha) >= 0.01f
-                || (fullV == 0f && shadeParams.alpha != 0f)
-                || (fullV == 1f && shadeParams.alpha != 1f)) {
-            shadeParams.alpha = fullV;
+
+        // Android only lets taps through an overlay whose window alpha is <= 0.8, so the
+        // window stays at 0.8 while the middle is readable and goes to 1.0 (true black,
+        // taps blocked) once the middle is nearly dark anyway.
+        float worst = Math.max(Math.max(Math.abs(kxDev), Math.abs(kyDev)), fullV);
+        boolean wantOpaque = opaque ? worst > 0.68f : worst > 0.78f;
+        if (wantOpaque != opaque) {
+            opaque = wantOpaque;
+            shadeParams.alpha = opaque ? 1f : TOUCH_ALPHA;
             windowManager.updateViewLayout(shade, shadeParams);
         }
+        shade.set(a, sa, b, sb, fullV, louvers, opaque ? 1f : 1f / TOUCH_ALPHA);
     }
 
     // ---------------------------------------------------------------- face
 
     private void startFace() {
-        faceWatcher = new FaceWatcher(this, count -> {
+        faceWatcher = new FaceWatcher(this, (count, hasPos, tx, ty) -> {
             long now = SystemClock.elapsedRealtime();
             if (count >= 1) lastFaceTime = now;
             if (count >= 2) lastMultiTime = now;
+            if (count >= 1 && hasPos) {
+                faceTx = tx;
+                faceTy = ty;
+                lastFacePosTime = now;
+            }
         });
         lastFaceTime = SystemClock.elapsedRealtime() + 1500; // extra grace while the camera warms up
         faceActive = faceWatcher.start();
@@ -314,22 +318,57 @@ public class PrivacyService extends Service implements SensorEventListener {
             baseline = new float[]{gx, gy, gz};
         }
 
-        float dot = gx * baseline[0] + gy * baseline[1] + gz * baseline[2];
-        dot = Math.max(-1f, Math.min(1f, dot));
-        float tiltDeg = (float) Math.toDegrees(Math.acos(dot));
+        // Where the viewer is, relative to straight-on, as tangents along the phone's axes.
+        float tx, ty;
+        boolean faceLive = faceWatcher != null && faceWatcher.isWorking()
+                && SystemClock.elapsedRealtime() - lastFacePosTime < FACE_POS_FRESH_MS;
+        if (faceLive) {
+            // Real viewing angle: where your face is in the front camera's view.
+            float fx = faceTx, fy = faceTy;
+            if (faceBase == null) faceBase = new float[]{fx, fy};
+            tx = tanDiff(fx, faceBase[0]);
+            ty = tanDiff(fy, faceBase[1]);
+            if (Math.abs(tx) < 0.1f && Math.abs(ty) < 0.1f) {
+                baseline[0] = gx; // keep the tilt reference in step while you're centred
+                baseline[1] = gy;
+                baseline[2] = gz;
+            }
+        } else {
+            // No camera: use how far the phone has turned away from where you held it.
+            double roll = Math.asin(clamp1(gx)) - Math.asin(clamp1(baseline[0]));
+            double pitch = Math.atan2(gy, gz) - Math.atan2(baseline[1], baseline[2]);
+            if (pitch > Math.PI) pitch -= 2 * Math.PI;
+            if (pitch < -Math.PI) pitch += 2 * Math.PI;
+            double lim = Math.toRadians(80);
+            tx = (float) -Math.tan(Math.max(-lim, Math.min(lim, roll)));
+            ty = (float) Math.tan(Math.max(-lim, Math.min(lim, pitch)));
+        }
 
-        // c: 0 = inside the allowed angle, 1 = tilted all the way past the fade range.
-        float c = tiltDeg <= sensitivityDeg ? 0f
-                : Math.min(1f, (tiltDeg - sensitivityDeg) / FADE_RANGE_DEG);
+        // Louver law: light passes in proportion to 1 - tan(angle) / tan(cutoff).
+        float tanCut = (float) Math.tan(Math.toRadians(sensitivityDeg));
+        float targetKx = Math.max(-2f, Math.min(2f, tx / tanCut));
+        float targetKy = Math.max(-2f, Math.min(2f, ty / tanCut));
+        float worst = Math.max(Math.abs(targetKx), fourWay ? Math.abs(targetKy) : 0f);
 
-        // Like a real privacy filter: the sides close in first, then it all goes black.
-        float targetSides = Math.min(1f, c / 0.7f);
-        float targetFull = c >= 1f ? 1f : 0f;
+        // Just past the cutoff a real filter is black edge to edge.
+        float targetFull = Math.max(0f, Math.min(1f, (worst - 1f) / 0.12f));
         targetFull = Math.max(targetFull, faceBlackout());
 
-        sides = ease(sides, targetSides);
+        kx += (targetKx - kx) * 0.3f;
+        ky += (targetKy - ky) * 0.3f;
         full = ease(full, targetFull);
-        applyShade(sides, full);
+        applyShade(kx, ky, full);
+    }
+
+    private static float clamp1(float v) {
+        return Math.max(-1f, Math.min(1f, v));
+    }
+
+    /** tan(atan(a) - atan(b)) */
+    private static float tanDiff(float a, float b) {
+        float d = 1f + a * b;
+        if (d < 0.05f) return a > b ? 20f : -20f;
+        return (a - b) / d;
     }
 
     /** Darken fast, clear a touch slower, snap at the ends so black is truly black. */
@@ -366,8 +405,8 @@ public class PrivacyService extends Service implements SensorEventListener {
                 .setSmallIcon(R.drawable.ic_shield)
                 .setContentTitle("Privacy screen is on")
                 .setContentText(withCamera
-                        ? "Blacks out when tilted away or when your face isn't seen"
-                        : "Screen darkens when tilted away from you")
+                        ? "Privacy filter on: visible only from straight ahead"
+                        : "Privacy filter on: darkens when tilted away")
                 .setContentIntent(open)
                 .setOngoing(true)
                 .addAction(new Notification.Action.Builder(null, "Reset angle", recal).build())

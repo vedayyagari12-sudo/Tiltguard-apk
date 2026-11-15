@@ -27,8 +27,8 @@ import android.widget.Toast;
 /** One screen: a big ON/OFF button, a sensitivity slider and a "reset angle" button. */
 public class MainActivity extends Activity {
 
-    private static final int MIN_DEG = 5;
-    private static final int MAX_DEG = 40;
+    private static final int MIN_DEG = 15;
+    private static final int MAX_DEG = 45;
     private static final int BRAND = 0xFF1E3A5F;
     private static final int GREEN = 0xFF2E9E5B;
 
@@ -82,8 +82,8 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("Works like a privacy screen protector: the edges stay black, the screen "
-                + "only shows while your face is in front of it, and it blacks out if you tilt it away.");
+        sub.setText("A software privacy filter. The screen is clear straight on, dims as the "
+                + "viewing angle grows, and is black past the privacy angle.");
         sub.setTextColor(0xFFB8C4D6);
         sub.setTextSize(15);
         sub.setGravity(Gravity.CENTER);
@@ -113,7 +113,7 @@ public class MainActivity extends Activity {
 
         SeekBar slider = new SeekBar(this);
         slider.setMax(MAX_DEG - MIN_DEG);
-        slider.setProgress(PrivacyService.sensitivityDeg - MIN_DEG);
+        slider.setProgress(Math.max(0, PrivacyService.sensitivityDeg - MIN_DEG));
         slider.setPadding((int) (8 * dp), (int) (12 * dp), (int) (8 * dp), (int) (12 * dp));
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -135,7 +135,7 @@ public class MainActivity extends Activity {
         root.addView(slider, matchWidth());
 
         TextView hint = new TextView(this);
-        hint.setText("Left = darkens with a small tilt (more private)\nRight = allows more tilt");
+        hint.setText("Real privacy protectors are about 30°. Lower = more private.");
         hint.setTextColor(0xFF7F8EA3);
         hint.setTextSize(13);
         root.addView(hint, matchWidth());
@@ -147,17 +147,17 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams slp = matchWidth();
         slp.topMargin = (int) (20 * dp);
         root.addView(sidesLabel, slp);
-        sidesLabel.setText("Black edges: " + PrivacyService.sidePercent + "% each side");
+        sidesLabel.setText("Edge shading: " + PrivacyService.sidePercent + "%");
 
         SeekBar sides = new SeekBar(this);
-        sides.setMax(30);
+        sides.setMax(100);
         sides.setProgress(PrivacyService.sidePercent);
         sides.setPadding((int) (8 * dp), (int) (12 * dp), (int) (8 * dp), (int) (12 * dp));
         sides.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
                 PrivacyService.sidePercent = p;
-                sidesLabel.setText("Black edges: " + p + "% each side");
+                sidesLabel.setText("Edge shading: " + p + "%");
             }
 
             @Override
@@ -171,8 +171,26 @@ public class MainActivity extends Activity {
         });
         root.addView(sides, matchWidth());
 
+        Switch louverSw = makeSwitch("Louver lines (fine black lines, like the real film)", dp);
+        louverSw.setChecked(PrivacyService.louvers);
+        louverSw.setOnCheckedChangeListener((b, on) -> {
+            PrivacyService.louvers = on;
+            getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PrivacyService.KEY_LOUVERS, on).apply();
+        });
+        root.addView(louverSw, matchWidth());
+
+        Switch fourSw = makeSwitch("4-way: also block from above and below", dp);
+        fourSw.setChecked(PrivacyService.fourWay);
+        fourSw.setOnCheckedChangeListener((b, on) -> {
+            PrivacyService.fourWay = on;
+            getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PrivacyService.KEY_FOURWAY, on).apply();
+        });
+        root.addView(fourSw, matchWidth());
+
         // ---- face check
-        faceSwitch = makeSwitch("Only show the screen when my face is there", dp);
+        faceSwitch = makeSwitch("Track my face with the front camera", dp);
         faceSwitch.setChecked(PrivacyService.faceCheck && PrivacyService.hasCamera(this));
         faceSwitch.setOnCheckedChangeListener((b, on) -> {
             if (on && !PrivacyService.hasCamera(this)) {
@@ -251,7 +269,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateSensitivityLabel() {
-        sensitivityLabel.setText("Allowed tilt: " + PrivacyService.sensitivityDeg + "°");
+        sensitivityLabel.setText("Privacy angle: " + PrivacyService.sensitivityDeg + "°");
     }
 
     private void refresh() {

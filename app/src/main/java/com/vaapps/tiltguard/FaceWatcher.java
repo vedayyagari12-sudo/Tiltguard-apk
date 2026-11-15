@@ -36,11 +36,16 @@ import java.util.Collections;
 class FaceWatcher {
 
     interface Listener {
-        /** Called on a background thread. */
-        void onFaces(int count);
+        /**
+         * Called on a background thread.
+         * tx, ty: where the biggest face is, as seen from the screen, in the phone's own axes
+         * (tangent of the angle; +x = toward the phone's right edge, +y = toward its top).
+         * Only meaningful when hasPos is true.
+         */
+        void onFaces(int count, boolean hasPos, float tx, float ty);
     }
 
-    private static final long SOFTWARE_INTERVAL_MS = 450;
+    private static final long SOFTWARE_INTERVAL_MS = 300;
     private static final int TARGET_LONG_SIDE = 320;
 
     private final Context context;
@@ -61,6 +66,12 @@ class FaceWatcher {
     private FaceDetector detector;
     private int detW, detH;
     private int[] argb;
+
+    // Half field of view (as tangents) along the sensor's own x and y axes.
+    private float tanSensorX = 0.62f, tanSensorY = 0.47f;   // full sensor (hardware face boxes)
+    private float tanStreamX = 0.62f, tanStreamY = 0.47f;   // after cropping to the stream shape
+    private android.graphics.Rect activeArray;
+    private final android.graphics.PointF mid = new android.graphics.PointF();
 
     /** Elapsed-realtime of the last camera frame; 0 if the camera never delivered. */
     volatile long lastFrameTime = 0;
@@ -86,6 +97,21 @@ class FaceWatcher {
                 size = pickSize(map.getOutputSizes(ImageFormat.YUV_420_888));
                 Integer o = ch.get(CameraCharacteristics.SENSOR_ORIENTATION);
                 if (o != null) sensorOrientation = o;
+                activeArray = ch.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+                android.util.SizeF phys = ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+                float[] focals = ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+                if (phys != null && focals != null && focals.length > 0 && focals[0] > 0) {
+                    tanSensorX = phys.getWidth() / 2f / focals[0];
+                    tanSensorY = phys.getHeight() / 2f / focals[0];
+                }
+                tanStreamX = tanSensorX;
+                tanStreamY = tanSensorY;
+                if (size != null && size.getHeight() > 0 && tanSensorY > 0) {
+                    float streamAr = (float) size.getWidth() / size.getHeight();
+                    float sensorAr = tanSensorX / tanSensorY;
+                    if (streamAr > sensorAr) tanStreamY = tanSensorX / streamAr;
+                    else tanStreamX = tanSensorY * streamAr;
+                }
 
                 int[] modes = ch.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES);
                 Integer max = ch.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT);
@@ -208,12 +234,27 @@ class FaceWatcher {
                     if (hardwareMode == CaptureRequest.STATISTICS_FACE_DETECT_MODE_OFF) return;
                     Face[] faces = result.get(CaptureResult.STATISTICS_FACES);
                     int n = 0;
+                    Face big = null;
                     if (faces != null) {
-                        for (Face f : faces) if (f.getScore() >= 30) n++;
+                        for (Face f : faces) {
+                            if (f.getScore() < 30) continue;
+                            n++;
+                            if (big == null || f.getBounds().width() > big.getBounds().width()) big = f;
+                        }
                     }
                     hardwareCount = n;
                     hardwareTime = SystemClock.elapsedRealtime();
-                    if (n > 0) listener.onFaces(n);
+                    if (n > 0) {
+                        if (activeArray != null && activeArray.width() > 0 && activeArray.height() > 0) {
+                            float cx = (big.getBounds().exactCenterX() - activeArray.left)
+                                    / activeArray.width() * 2f - 1f;
+                            float cy = (big.getBounds().exactCenterY() - activeArray.top)
+                                    / activeArray.height() * 2f - 1f;
+                            report(n, cx * tanSensorX, cy * tanSensorY);
+                        } else {
+                            listener.onFaces(n, false, 0f, 0f);
+                        }
+                    }
                 }
             };
 
@@ -232,11 +273,31 @@ class FaceWatcher {
             lastSoftware = now;
             int sw = softwareCount(img);
             int hw = now - hardwareTime < 1000 ? hardwareCount : 0;
-            listener.onFaces(Math.max(sw, hw));
+            if (hw > 0) return; // the camera chip is already reporting faces with positions
+            if (sw > 0) report(sw, softSx, softSy);
+            else listener.onFaces(0, false, 0f, 0f);
         } catch (RuntimeException ignored) {
         } finally {
             img.close();
         }
+    }
+
+    private float softSx, softSy; // biggest software-detected face, in sensor-axis tangents
+
+    /**
+     * (sx, sy) = tangents of the face direction along the sensor's own x/y axes (y down).
+     * Turns that into the phone's axes: rotate the picture upright, then flip, because the
+     * camera looks out of the screen (its left is the phone's right, picture-down is phone-down).
+     */
+    private void report(int count, float sx, float sy) {
+        float ox, oy; // upright picture: +ox = right, +oy = down
+        switch (sensorOrientation % 360) {
+            case 90:  ox = -sy; oy = sx; break;
+            case 180: ox = -sx; oy = -sy; break;
+            case 270: ox = sy; oy = -sx; break;
+            default:  ox = sx; oy = sy;
+        }
+        listener.onFaces(count, true, -ox, -oy);
     }
 
     /** Grayscale, downscaled, rotated upright, then Android's FaceDetector. */
@@ -290,8 +351,26 @@ class FaceWatcher {
         int n = detector.findFaces(b565, found);
         b565.recycle();
         int good = 0;
+        float bestEyes = -1f;
         for (int i = 0; i < n; i++) {
-            if (found[i] != null && found[i].confidence() >= 0.3f) good++;
+            if (found[i] == null || found[i].confidence() < 0.3f) continue;
+            good++;
+            if (found[i].eyesDistance() > bestEyes) {
+                bestEyes = found[i].eyesDistance();
+                found[i].getMidPoint(mid);
+                // Undo the upright rotation to get back to sensor-axis coordinates.
+                float ux = mid.x / outW * 2f - 1f;
+                float uy = mid.y / outH * 2f - 1f;
+                float nx, ny;
+                switch (rot) {
+                    case 90:  nx = uy; ny = -ux; break;
+                    case 180: nx = -ux; ny = -uy; break;
+                    case 270: nx = -uy; ny = ux; break;
+                    default:  nx = ux; ny = uy;
+                }
+                softSx = nx * tanStreamX;
+                softSy = ny * tanStreamY;
+            }
         }
         return good;
     }
