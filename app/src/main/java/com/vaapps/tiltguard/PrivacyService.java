@@ -43,7 +43,7 @@ public class PrivacyService extends Service implements SensorEventListener {
     static final int DEFAULT_SENSITIVITY = 30;
     static final String KEY_LOUVERS = "louvers";
     static final String KEY_FOURWAY = "four_way";
-    static final String KEY_FACE = "face_check";
+    static final String KEY_FACE = "face_tracking"; // optional, off unless switched on
     static final String KEY_MULTI = "multi_face";
     static final String KEY_SIDES = "edge_shade"; // how dark the edges are, percent
     static final int DEFAULT_SIDES = 40;
@@ -52,17 +52,18 @@ public class PrivacyService extends Service implements SensorEventListener {
     private static final int NOTIF_ID = 1;
     private static final float TOUCH_ALPHA = 0.8f;   // Android passes touches through up to this
     private static final long FACE_POS_FRESH_MS = 800;
+    private static final float CLEAR_ZONE = 0.5f;
     private static final long NO_FACE_GRACE_MS = 1500; // black out after this long without a face
     private static final long MULTI_FACE_HOLD_MS = 1200;
     private static final long FACE_RETRY_MS = 5000;
 
     static volatile boolean running = false;
     static volatile int sensitivityDeg = DEFAULT_SENSITIVITY;
-    static volatile boolean faceCheck = true;
+    static volatile boolean faceCheck = false;
     static volatile boolean multiFace = true;
     static volatile boolean faceActive = false; // camera actually running
     static volatile int sidePercent = DEFAULT_SIDES;
-    static volatile boolean louvers = true;
+    static volatile boolean louvers = false;
     static volatile boolean fourWay = false;
 
     private WindowManager windowManager;
@@ -79,6 +80,7 @@ public class PrivacyService extends Service implements SensorEventListener {
     private float full = 0f;
     private volatile float faceTx, faceTy;
     private volatile long lastFacePosTime;
+    private double lastRoll = 0;
     private float[] faceBase;           // where your face sits when looking straight on
 
     private FaceWatcher faceWatcher;
@@ -118,10 +120,10 @@ public class PrivacyService extends Service implements SensorEventListener {
     static void loadSettings(Context c) {
         SharedPreferences p = c.getSharedPreferences(PREFS, MODE_PRIVATE);
         sensitivityDeg = p.getInt(KEY_SENSITIVITY, DEFAULT_SENSITIVITY);
-        faceCheck = p.getBoolean(KEY_FACE, true);
+        faceCheck = p.getBoolean(KEY_FACE, false);
         multiFace = p.getBoolean(KEY_MULTI, true);
-        sidePercent = p.getInt(KEY_SIDES, DEFAULT_SIDES);
-        louvers = p.getBoolean(KEY_LOUVERS, true);
+        sidePercent = 0;   // no edge shading: the front view stays completely clear
+        louvers = false;   // no louver lines either
         fourWay = p.getBoolean(KEY_FOURWAY, false);
     }
 
@@ -153,6 +155,7 @@ public class PrivacyService extends Service implements SensorEventListener {
         }
         if (ACTION_RECALIBRATE.equals(action)) {
             baseline = null; // next sensor reading becomes the new "straight on" angle
+            lastRoll = 0;
             faceBase = null;
         }
         return START_STICKY;
@@ -335,10 +338,17 @@ public class PrivacyService extends Service implements SensorEventListener {
             }
         } else {
             // No camera: use how far the phone has turned away from where you held it.
-            double roll = Math.asin(clamp1(gx)) - Math.asin(clamp1(baseline[0]));
-            double pitch = Math.atan2(gy, gz) - Math.atan2(baseline[1], baseline[2]);
-            if (pitch > Math.PI) pitch -= 2 * Math.PI;
-            if (pitch < -Math.PI) pitch += 2 * Math.PI;
+            // roll  = turning the phone left/right around its long axis
+            // pitch = tipping the top toward/away from you
+            // (Turning your whole body doesn't change either, so walking around is fine.)
+            if (Math.hypot(gx, gz) > 0.12 && Math.hypot(baseline[0], baseline[2]) > 0.12) {
+                double r = Math.atan2(gx, gz) - Math.atan2(baseline[0], baseline[2]);
+                if (r > Math.PI) r -= 2 * Math.PI;
+                if (r < -Math.PI) r += 2 * Math.PI;
+                lastRoll = r;
+            } // else: phone is almost exactly upright, where roll can't be measured; keep the last value
+            double roll = lastRoll;
+            double pitch = Math.asin(clamp1(gy)) - Math.asin(clamp1(baseline[1]));
             double lim = Math.toRadians(80);
             tx = (float) -Math.tan(Math.max(-lim, Math.min(lim, roll)));
             ty = (float) Math.tan(Math.max(-lim, Math.min(lim, pitch)));
@@ -346,8 +356,8 @@ public class PrivacyService extends Service implements SensorEventListener {
 
         // Louver law: light passes in proportion to 1 - tan(angle) / tan(cutoff).
         float tanCut = (float) Math.tan(Math.toRadians(sensitivityDeg));
-        float targetKx = Math.max(-2f, Math.min(2f, tx / tanCut));
-        float targetKy = Math.max(-2f, Math.min(2f, ty / tanCut));
+        float targetKx = clearZone(Math.max(-2f, Math.min(2f, tx / tanCut)));
+        float targetKy = clearZone(Math.max(-2f, Math.min(2f, ty / tanCut)));
         float worst = Math.max(Math.abs(targetKx), fourWay ? Math.abs(targetKy) : 0f);
 
         // Just past the cutoff a real filter is black edge to edge.
@@ -358,6 +368,16 @@ public class PrivacyService extends Service implements SensorEventListener {
         ky += (targetKy - ky) * 0.3f;
         full = ease(full, targetFull);
         applyShade(kx, ky, full);
+    }
+
+    /**
+     * Keeps the front view untouched: nothing is drawn until you're past half the privacy
+     * angle, then it fades to black by the privacy angle.
+     */
+    private static float clearZone(float k) {
+        float a = Math.abs(k);
+        if (a <= CLEAR_ZONE) return 0f;
+        return Math.signum(k) * (a - CLEAR_ZONE) / (1f - CLEAR_ZONE);
     }
 
     private static float clamp1(float v) {

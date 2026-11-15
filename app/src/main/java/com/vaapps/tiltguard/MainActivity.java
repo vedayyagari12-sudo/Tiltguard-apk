@@ -82,8 +82,8 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("A software privacy filter. The screen is clear straight on, dims as the "
-                + "viewing angle grows, and is black past the privacy angle.");
+        sub.setText("Hold the phone the way you normally read it and tap the button. "
+                + "Straight on, the screen is untouched. Turn it to the side and it goes black.");
         sub.setTextColor(0xFFB8C4D6);
         sub.setTextSize(15);
         sub.setGravity(Gravity.CENTER);
@@ -135,50 +135,10 @@ public class MainActivity extends Activity {
         root.addView(slider, matchWidth());
 
         TextView hint = new TextView(this);
-        hint.setText("Real privacy protectors are about 30°. Lower = more private.");
+        hint.setText("Black at this angle. Completely clear up to half of it.\nReal privacy protectors are about 30°.");
         hint.setTextColor(0xFF7F8EA3);
         hint.setTextSize(13);
         root.addView(hint, matchWidth());
-
-        // ---- side bands
-        TextView sidesLabel = new TextView(this);
-        sidesLabel.setTextColor(Color.WHITE);
-        sidesLabel.setTextSize(16);
-        LinearLayout.LayoutParams slp = matchWidth();
-        slp.topMargin = (int) (20 * dp);
-        root.addView(sidesLabel, slp);
-        sidesLabel.setText("Edge shading: " + PrivacyService.sidePercent + "%");
-
-        SeekBar sides = new SeekBar(this);
-        sides.setMax(100);
-        sides.setProgress(PrivacyService.sidePercent);
-        sides.setPadding((int) (8 * dp), (int) (12 * dp), (int) (8 * dp), (int) (12 * dp));
-        sides.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                PrivacyService.sidePercent = p;
-                sidesLabel.setText("Edge shading: " + p + "%");
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar s) { }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar s) {
-                getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
-                        .putInt(PrivacyService.KEY_SIDES, PrivacyService.sidePercent).apply();
-            }
-        });
-        root.addView(sides, matchWidth());
-
-        Switch louverSw = makeSwitch("Louver lines (fine black lines, like the real film)", dp);
-        louverSw.setChecked(PrivacyService.louvers);
-        louverSw.setOnCheckedChangeListener((b, on) -> {
-            PrivacyService.louvers = on;
-            getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
-                    .putBoolean(PrivacyService.KEY_LOUVERS, on).apply();
-        });
-        root.addView(louverSw, matchWidth());
 
         Switch fourSw = makeSwitch("4-way: also block from above and below", dp);
         fourSw.setChecked(PrivacyService.fourWay);
@@ -190,7 +150,7 @@ public class MainActivity extends Activity {
         root.addView(fourSw, matchWidth());
 
         // ---- face check
-        faceSwitch = makeSwitch("Track my face with the front camera", dp);
+        faceSwitch = makeSwitch("Also use the front camera (black when no face is seen)", dp);
         faceSwitch.setChecked(PrivacyService.faceCheck && PrivacyService.hasCamera(this));
         faceSwitch.setOnCheckedChangeListener((b, on) -> {
             if (on && !PrivacyService.hasCamera(this)) {
@@ -201,7 +161,7 @@ public class MainActivity extends Activity {
         });
         root.addView(faceSwitch, matchWidth());
 
-        Switch multi = makeSwitch("Black out if someone else is looking too", dp);
+        Switch multi = makeSwitch("With camera: black out if a second face appears", dp);
         multi.setChecked(PrivacyService.multiFace);
         multi.setOnCheckedChangeListener((b, on) -> {
             PrivacyService.multiFace = on;
