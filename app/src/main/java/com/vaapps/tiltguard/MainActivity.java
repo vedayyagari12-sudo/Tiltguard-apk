@@ -163,6 +163,10 @@ public class MainActivity extends Activity {
         gridCell.setProgress(Math.max(0, PrivacyService.gridCell - 3));
         root.addView(gridCell, matchWidth());
 
+        Switch decoySw = makeSwitch("Decoy blobs: appear when the screen is tilted and dims", dp);
+        decoySw.setChecked(PrivacyService.decoyOn);
+        root.addView(decoySw, matchWidth());
+
         TextView decoyLabel = new TextView(this);
         decoyLabel.setTextColor(Color.WHITE);
         decoyLabel.setTextSize(15);
@@ -172,7 +176,7 @@ public class MainActivity extends Activity {
         decoySb.setProgress(PrivacyService.decoyStrength);
         root.addView(decoySb, matchWidth());
 
-        Switch movingSw = makeSwitch("Moving pattern (harder for others to tune out)", dp);
+        Switch movingSw = makeSwitch("Moving patterns (harder for others to tune out)", dp);
         movingSw.setChecked(PrivacyService.gridMoving);
         movingSw.setOnCheckedChangeListener((b, on) -> {
             PrivacyService.gridMoving = on;
@@ -192,18 +196,26 @@ public class MainActivity extends Activity {
         Runnable gridUi = () -> {
             gridStrLabel.setText("Mesh strength: " + PrivacyService.gridStrength + "%");
             gridCellLabel.setText("Mesh spacing: " + PrivacyService.gridCell + " px");
-            decoyLabel.setText("Decoy blobs (appear as it dims): " + PrivacyService.decoyStrength + "%");
+            decoyLabel.setText("Decoy blob strength: " + PrivacyService.decoyStrength + "%");
             int vis = PrivacyService.gridMode ? View.VISIBLE : View.GONE;
+            int dvis = PrivacyService.decoyOn ? View.VISIBLE : View.GONE;
             gridStrLabel.setVisibility(vis);
             gridStr.setVisibility(vis);
             gridCellLabel.setVisibility(vis);
             gridCell.setVisibility(vis);
-            decoyLabel.setVisibility(vis);
-            decoySb.setVisibility(vis);
-            movingSw.setVisibility(vis);
+            decoyLabel.setVisibility(dvis);
+            decoySb.setVisibility(dvis);
+            movingSw.setVisibility(PrivacyService.gridMode || PrivacyService.decoyOn
+                    ? View.VISIBLE : View.GONE);
             gridHint.setVisibility(vis);
         };
         gridUi.run();
+        decoySw.setOnCheckedChangeListener((b, on) -> {
+            PrivacyService.decoyOn = on;
+            getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PrivacyService.KEY_DECOY_ON, on).apply();
+            gridUi.run();
+        });
         gridSw.setOnCheckedChangeListener((b, on) -> {
             PrivacyService.gridMode = on;
             getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()

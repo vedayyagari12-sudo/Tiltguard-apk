@@ -93,8 +93,6 @@ public class ShadeView extends View {
         tile.setPixel(0, 0, Color.GRAY);
         meshShader = new BitmapShader(tile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
         linePaint.setShader(meshShader);
-
-    }
     }
 
     /**

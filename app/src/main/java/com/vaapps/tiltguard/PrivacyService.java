@@ -46,6 +46,7 @@ public class PrivacyService extends Service implements SensorEventListener {
     static final String KEY_GRID_CELL = "grid_cell";      // pixels between mesh lines
     static final String KEY_DECOY = "grid_decoy";         // percent
     static final String KEY_MOVING = "grid_moving";
+    static final String KEY_DECOY_ON = "decoy_on";
     static final String KEY_FOURWAY = "four_way";
     static final String KEY_FACE = "face_tracking"; // optional, off unless switched on
     static final String KEY_MULTI = "multi_face";
@@ -72,6 +73,7 @@ public class PrivacyService extends Service implements SensorEventListener {
     static volatile int gridCell = 3;
     static volatile int decoyStrength = 35;
     static volatile boolean gridMoving = true;
+    static volatile boolean decoyOn = true;
     static volatile boolean fourWay = false;
 
     private WindowManager windowManager;
@@ -136,6 +138,7 @@ public class PrivacyService extends Service implements SensorEventListener {
         gridCell = p.getInt(KEY_GRID_CELL, 3);
         decoyStrength = p.getInt(KEY_DECOY, 35);
         gridMoving = p.getBoolean(KEY_MOVING, true);
+        decoyOn = p.getBoolean(KEY_DECOY_ON, true);
         fourWay = p.getBoolean(KEY_FOURWAY, false);
     }
 
@@ -246,10 +249,9 @@ public class PrivacyService extends Service implements SensorEventListener {
             shadeParams.alpha = opaque ? 1f : TOUCH_ALPHA;
             windowManager.updateViewLayout(shade, shadeParams);
         }
-        // Decoy blobs fade in as the screen dims from tilt, and are gone when it's clear.
-        float tiltAmount = Math.min(1f, Math.max(Math.abs(kxDev), Math.abs(kyDev)));
+        // Decoy strength is the max; ShadeView fades the blobs in as the screen tilts and dims.
         shade.set(a, sa, b, sb, fullV, gridMode ? gridCell : 0, gridStrength / 100f,
-                decoyStrength / 100f * tiltAmount, gridMoving, opaque ? 1f : 1f / TOUCH_ALPHA);
+                decoyOn ? decoyStrength / 100f : 0f, gridMoving, opaque ? 1f : 1f / TOUCH_ALPHA);
     }
 
     // ---------------------------------------------------------------- face
