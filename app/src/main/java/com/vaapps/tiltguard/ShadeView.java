@@ -53,6 +53,21 @@ public class ShadeView extends View {
 
     public ShadeView(Context c) {
         super(c);
+        buildDecoy();
+    }
+
+    private void buildDecoy() {
+        // Random light/dark field, stretched over the screen with smoothing:
+        // large soft blobs that dominate what a distant eye sees.
+        java.util.Random r = new java.util.Random();
+        decoy = Bitmap.createBitmap(10, 18, Bitmap.Config.ARGB_8888);
+        for (int y = 0; y < 18; y++) {
+            for (int x = 0; x < 10; x++) {
+                int v = r.nextBoolean() ? 20 + r.nextInt(50) : 185 + r.nextInt(60);
+                decoy.setPixel(x, y, Color.rgb(v, v, v));
+            }
+        }
+        decoyPaint.setShader(new BitmapShader(decoy, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR));
     }
 
     /**
@@ -79,19 +94,7 @@ public class ShadeView extends View {
         meshShader = new BitmapShader(tile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
         linePaint.setShader(meshShader);
 
-        if (decoy == null) {
-            // Random light/dark field, stretched over the screen with smoothing:
-            // large soft blobs that dominate what a distant eye sees.
-            java.util.Random r = new java.util.Random();
-            decoy = Bitmap.createBitmap(10, 18, Bitmap.Config.ARGB_8888);
-            for (int y = 0; y < 18; y++) {
-                for (int x = 0; x < 10; x++) {
-                    int v = r.nextBoolean() ? 20 + r.nextInt(50) : 185 + r.nextInt(60);
-                    decoy.setPixel(x, y, Color.rgb(v, v, v));
-                }
-            }
-            decoyPaint.setShader(new BitmapShader(decoy, Shader.TileMode.MIRROR, Shader.TileMode.MIRROR));
-        }
+    }
     }
 
     /**
@@ -146,31 +149,35 @@ public class ShadeView extends View {
             gradPaint.setShader(new LinearGradient(0, 0, 0, h, colors, null, Shader.TileMode.CLAMP));
             canvas.drawRect(0, 0, w, h, gradPaint);
         }
+        long t = android.os.SystemClock.uptimeMillis() - startTime;
+        boolean animate = false;
+
+        // Decoy blobs fade in as the screen tilts away and dims, and are gone when it's clear.
+        float tilt = Math.min(1f, Math.max(Math.max(Math.abs(kx), Math.abs(ky)), full));
+        float blobs = decoyAlpha * tilt;
+        if (blobs > 0.01f && decoy != null) {
+            float sxs = w / 10f * 1.4f;
+            float sys = h / 18f * 1.4f;
+            float drift = moving ? t / 1000f : 0f;
+            matrix.setScale(sxs, sys);
+            matrix.postTranslate((float) Math.sin(drift * 0.35) * w * 0.25f,
+                    (float) Math.cos(drift * 0.27) * h * 0.2f - drift * 18f);
+            decoyPaint.getShader().setLocalMatrix(matrix);
+            decoyPaint.setAlpha((int) (Math.min(1f, blobs * gain) * 255));
+            canvas.drawRect(0, 0, w, h, decoyPaint);
+            animate = moving;
+        }
+
         if (gridCell > 0 && meshShader != null) {
-            long t = android.os.SystemClock.uptimeMillis() - startTime;
-
-            if (decoyAlpha > 0.01f && decoy != null) {
-                // Blobs about 1/10 of the screen wide, drifting slowly.
-                float sxs = w / 10f * 1.4f;
-                float sys = h / 18f * 1.4f;
-                float drift = moving ? t / 1000f : 0f;
-                matrix.setScale(sxs, sys);
-                matrix.postTranslate((float) Math.sin(drift * 0.35) * w * 0.25f,
-                        (float) Math.cos(drift * 0.27) * h * 0.2f - drift * 18f);
-                decoyPaint.getShader().setLocalMatrix(matrix);
-                decoyPaint.setAlpha((int) (Math.min(1f, decoyAlpha * gain) * 255));
-                canvas.drawRect(0, 0, w, h, decoyPaint);
-            }
-
             // Mesh creeps one pixel at a time so the eye can't lock onto it.
             int step = moving ? (int) ((t / 90) % (gridCell * 2)) : 0;
             matrix.setTranslate(step, step / 2f);
             meshShader.setLocalMatrix(matrix);
             linePaint.setAlpha((int) (Math.min(1f, gridAlpha * gain) * 255));
             canvas.drawRect(0, 0, w, h, linePaint);
-
-            if (moving) postInvalidateDelayed(45);
+            animate |= moving;
         }
+        if (animate) postInvalidateDelayed(45);
         if (full > 0.001f) {
             canvas.drawColor(Color.argb((int) (Math.min(1f, full * gain) * 255), 0, 0, 0));
         }
