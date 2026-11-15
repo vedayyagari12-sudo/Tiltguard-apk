@@ -41,7 +41,7 @@ public class PrivacyService extends Service implements SensorEventListener {
 
     private static final String CHANNEL_ID = "privacy";
     private static final int NOTIF_ID = 1;
-    private static final float MAX_DARKNESS = 0.97f;
+    private static final float MAX_DARKNESS = 1.0f;
     private static final float FADE_RANGE_DEG = 12f; // degrees from "clear" to "fully dark"
 
     static volatile boolean running = false;
@@ -151,7 +151,7 @@ public class PrivacyService extends Service implements SensorEventListener {
     }
 
     private void applyDarkness(float d) {
-        if (shade == null || Math.abs(d - appliedDarkness) < 0.01f) return;
+        if (shade == null || (Math.abs(d - appliedDarkness) < 0.01f && d != MAX_DARKNESS)) return;
         appliedDarkness = d;
         // Window alpha (not view alpha) so touches still pass through while clear.
         // Above 0.8 Android blocks touches, which only happens while tilted away.
@@ -211,6 +211,7 @@ public class PrivacyService extends Service implements SensorEventListener {
         float speed = target > darkness ? 0.35f : 0.2f;
         darkness += (target - darkness) * speed;
         if (darkness < 0.005f) darkness = 0f;
+        if (target >= MAX_DARKNESS && darkness > 0.99f) darkness = MAX_DARKNESS; // snap to pure black
         applyDarkness(darkness);
     }
 
