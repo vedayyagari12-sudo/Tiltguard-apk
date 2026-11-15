@@ -19,6 +19,8 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
+import android.widget.Switch;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,13 +36,18 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView sensitivityLabel;
     private Button resetButton;
+    private Switch faceSwitch;
+    private static final int REQ_CAMERA = 2;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         PrivacyService.loadSettings(this);
-        setContentView(buildUi());
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(0xFF0F1A2A);
+        scroll.addView(buildUi());
+        setContentView(scroll);
 
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -65,7 +72,7 @@ public class MainActivity extends Activity {
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setBackgroundColor(0xFF0F1A2A);
         int pad = (int) (24 * dp);
-        root.setPadding(pad, (int) (56 * dp), pad, pad);
+        root.setPadding(pad, (int) (40 * dp), pad, pad);
 
         TextView title = new TextView(this);
         title.setText("TiltGuard");
@@ -75,8 +82,8 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("Hold your phone the way you normally look at it, then tap the button. "
-                + "Tilt it away and the screen goes dark.");
+        sub.setText("Works like a privacy screen protector: the edges stay black, the screen "
+                + "only shows while your face is in front of it, and it blacks out if you tilt it away.");
         sub.setTextColor(0xFFB8C4D6);
         sub.setTextSize(15);
         sub.setGravity(Gravity.CENTER);
@@ -88,7 +95,7 @@ public class MainActivity extends Activity {
         bigButton.setTextSize(26);
         bigButton.setTypeface(Typeface.DEFAULT_BOLD);
         bigButton.setAllCaps(false);
-        int size = (int) (200 * dp);
+        int size = (int) (170 * dp);
         root.addView(bigButton, new LinearLayout.LayoutParams(size, size));
         bigButton.setOnClickListener(v -> toggle());
 
@@ -133,13 +140,65 @@ public class MainActivity extends Activity {
         hint.setTextSize(13);
         root.addView(hint, matchWidth());
 
+        // ---- side bands
+        TextView sidesLabel = new TextView(this);
+        sidesLabel.setTextColor(Color.WHITE);
+        sidesLabel.setTextSize(16);
+        LinearLayout.LayoutParams slp = matchWidth();
+        slp.topMargin = (int) (20 * dp);
+        root.addView(sidesLabel, slp);
+        sidesLabel.setText("Black edges: " + PrivacyService.sidePercent + "% each side");
+
+        SeekBar sides = new SeekBar(this);
+        sides.setMax(30);
+        sides.setProgress(PrivacyService.sidePercent);
+        sides.setPadding((int) (8 * dp), (int) (12 * dp), (int) (8 * dp), (int) (12 * dp));
+        sides.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                PrivacyService.sidePercent = p;
+                sidesLabel.setText("Black edges: " + p + "% each side");
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar s) { }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar s) {
+                getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                        .putInt(PrivacyService.KEY_SIDES, PrivacyService.sidePercent).apply();
+            }
+        });
+        root.addView(sides, matchWidth());
+
+        // ---- face check
+        faceSwitch = makeSwitch("Only show the screen when my face is there", dp);
+        faceSwitch.setChecked(PrivacyService.faceCheck && PrivacyService.hasCamera(this));
+        faceSwitch.setOnCheckedChangeListener((b, on) -> {
+            if (on && !PrivacyService.hasCamera(this)) {
+                requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+                return; // finished in onRequestPermissionsResult
+            }
+            setFaceCheck(on);
+        });
+        root.addView(faceSwitch, matchWidth());
+
+        Switch multi = makeSwitch("Black out if someone else is looking too", dp);
+        multi.setChecked(PrivacyService.multiFace);
+        multi.setOnCheckedChangeListener((b, on) -> {
+            PrivacyService.multiFace = on;
+            getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PrivacyService.KEY_MULTI, on).apply();
+        });
+        root.addView(multi, matchWidth());
+
         resetButton = new Button(this);
         resetButton.setText("Reset viewing angle");
         resetButton.setAllCaps(false);
         resetButton.setTextColor(Color.WHITE);
         resetButton.setBackground(rounded(0xFF2A3A52, 14 * dp));
         LinearLayout.LayoutParams rp = matchWidth();
-        rp.topMargin = (int) (28 * dp);
+        rp.topMargin = (int) (20 * dp);
         root.addView(resetButton, rp);
         resetButton.setOnClickListener(v -> {
             PrivacyService.recalibrate(this);
@@ -148,6 +207,35 @@ public class MainActivity extends Activity {
 
         updateSensitivityLabel();
         return root;
+    }
+
+    private Switch makeSwitch(String text, float dp) {
+        Switch sw = new Switch(this);
+        sw.setText(text);
+        sw.setTextColor(Color.WHITE);
+        sw.setTextSize(15);
+        sw.setPadding(0, (int) (10 * dp), 0, (int) (10 * dp));
+        return sw;
+    }
+
+    private void setFaceCheck(boolean on) {
+        PrivacyService.faceCheck = on;
+        getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                .putBoolean(PrivacyService.KEY_FACE, on).apply();
+        PrivacyService.restart(this);
+        handler.postDelayed(this::refresh, 800);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(code, perms, results);
+        if (code != REQ_CAMERA) return;
+        boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        if (!granted) {
+            Toast.makeText(this, "Camera is needed to check for your face", Toast.LENGTH_LONG).show();
+            faceSwitch.setChecked(false);
+        }
+        setFaceCheck(granted);
     }
 
     private LinearLayout.LayoutParams matchWidth() {
@@ -174,8 +262,14 @@ public class MainActivity extends Activity {
         circle.setStroke((int) (4 * getResources().getDisplayMetrics().density), 0x55FFFFFF);
         bigButton.setBackground(circle);
         bigButton.setText(on ? "ON" : "OFF");
+        String faceNote = "";
+        if (on && PrivacyService.faceCheck && PrivacyService.hasCamera(this)) {
+            faceNote = PrivacyService.faceActive
+                    ? "\nFace check is on (front camera in use)."
+                    : "\nFace check is waiting for the camera.";
+        }
         status.setText(on
-                ? "Privacy screen is active.\nTurn it off here or from the notification."
+                ? "Privacy screen is active." + faceNote
                 : "Tap to turn on");
         resetButton.setEnabled(on);
         resetButton.setAlpha(on ? 1f : 0.4f);
@@ -195,8 +289,11 @@ public class MainActivity extends Activity {
                         Uri.parse("package:" + getPackageName())));
                 return;
             }
+            if (PrivacyService.faceCheck && !PrivacyService.hasCamera(this)) {
+                requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+            }
             PrivacyService.start(this);
         }
-        handler.postDelayed(this::refresh, 250);
+        handler.postDelayed(this::refresh, 600);
     }
 }
