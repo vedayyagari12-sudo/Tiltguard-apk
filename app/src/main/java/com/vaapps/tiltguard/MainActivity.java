@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
         root.addView(hint, matchWidth());
 
         // ---- experimental grid mode (Eye-Shield-style mesh)
-        Switch gridSw = makeSwitch("Grid mode (experimental): fine mesh that blurs out from a distance", dp);
+        Switch gridSw = makeSwitch("Grid mode: hard to read from a distance or the side", dp);
         gridSw.setChecked(PrivacyService.gridMode);
         root.addView(gridSw, matchWidth());
 
@@ -150,7 +150,7 @@ public class MainActivity extends Activity {
         gridStrLabel.setTextSize(15);
         root.addView(gridStrLabel, matchWidth());
         SeekBar gridStr = new SeekBar(this);
-        gridStr.setMax(60);
+        gridStr.setMax(70);
         gridStr.setProgress(Math.max(0, PrivacyService.gridStrength - 10));
         root.addView(gridStr, matchWidth());
 
@@ -163,14 +163,45 @@ public class MainActivity extends Activity {
         gridCell.setProgress(Math.max(0, PrivacyService.gridCell - 3));
         root.addView(gridCell, matchWidth());
 
+        TextView decoyLabel = new TextView(this);
+        decoyLabel.setTextColor(Color.WHITE);
+        decoyLabel.setTextSize(15);
+        root.addView(decoyLabel, matchWidth());
+        SeekBar decoySb = new SeekBar(this);
+        decoySb.setMax(70);
+        decoySb.setProgress(PrivacyService.decoyStrength);
+        root.addView(decoySb, matchWidth());
+
+        Switch movingSw = makeSwitch("Moving pattern (harder for others to tune out)", dp);
+        movingSw.setChecked(PrivacyService.gridMoving);
+        movingSw.setOnCheckedChangeListener((b, on) -> {
+            PrivacyService.gridMoving = on;
+            getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PrivacyService.KEY_MOVING, on).apply();
+        });
+        root.addView(movingSw, matchWidth());
+
+        TextView gridHint = new TextView(this);
+        gridHint.setText("Tip: hold it at arm's length. If you can still read it there, "
+                + "so can the person next to you. Raise mesh and decoy until it's just "
+                + "readable at your normal distance.");
+        gridHint.setTextColor(0xFF7F8EA3);
+        gridHint.setTextSize(13);
+        root.addView(gridHint, matchWidth());
+
         Runnable gridUi = () -> {
-            gridStrLabel.setText("Grid strength: " + PrivacyService.gridStrength + "%");
-            gridCellLabel.setText("Grid spacing: " + PrivacyService.gridCell + " px");
+            gridStrLabel.setText("Mesh strength: " + PrivacyService.gridStrength + "%");
+            gridCellLabel.setText("Mesh spacing: " + PrivacyService.gridCell + " px");
+            decoyLabel.setText("Decoy blobs: " + PrivacyService.decoyStrength + "%");
             int vis = PrivacyService.gridMode ? View.VISIBLE : View.GONE;
             gridStrLabel.setVisibility(vis);
             gridStr.setVisibility(vis);
             gridCellLabel.setVisibility(vis);
             gridCell.setVisibility(vis);
+            decoyLabel.setVisibility(vis);
+            decoySb.setVisibility(vis);
+            movingSw.setVisibility(vis);
+            gridHint.setVisibility(vis);
         };
         gridUi.run();
         gridSw.setOnCheckedChangeListener((b, on) -> {
@@ -183,6 +214,7 @@ public class MainActivity extends Activity {
             @Override
             public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
                 if (sb == gridStr) PrivacyService.gridStrength = p + 10;
+                else if (sb == decoySb) PrivacyService.decoyStrength = p;
                 else PrivacyService.gridCell = p + 3;
                 gridUi.run();
             }
@@ -194,11 +226,13 @@ public class MainActivity extends Activity {
             public void onStopTrackingTouch(SeekBar sb) {
                 getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
                         .putInt(PrivacyService.KEY_GRID_STR, PrivacyService.gridStrength)
-                        .putInt(PrivacyService.KEY_GRID_CELL, PrivacyService.gridCell).apply();
+                        .putInt(PrivacyService.KEY_GRID_CELL, PrivacyService.gridCell)
+                        .putInt(PrivacyService.KEY_DECOY, PrivacyService.decoyStrength).apply();
             }
         };
         gridStr.setOnSeekBarChangeListener(gridListener);
         gridCell.setOnSeekBarChangeListener(gridListener);
+        decoySb.setOnSeekBarChangeListener(gridListener);
 
         Switch fourSw = makeSwitch("4-way: also block from above and below", dp);
         fourSw.setChecked(PrivacyService.fourWay);

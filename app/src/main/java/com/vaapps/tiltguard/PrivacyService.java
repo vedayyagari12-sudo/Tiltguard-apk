@@ -44,6 +44,8 @@ public class PrivacyService extends Service implements SensorEventListener {
     static final String KEY_GRID = "grid_mode";
     static final String KEY_GRID_STR = "grid_strength";   // percent
     static final String KEY_GRID_CELL = "grid_cell";      // pixels between mesh lines
+    static final String KEY_DECOY = "grid_decoy";         // percent
+    static final String KEY_MOVING = "grid_moving";
     static final String KEY_FOURWAY = "four_way";
     static final String KEY_FACE = "face_tracking"; // optional, off unless switched on
     static final String KEY_MULTI = "multi_face";
@@ -66,8 +68,10 @@ public class PrivacyService extends Service implements SensorEventListener {
     static volatile boolean faceActive = false; // camera actually running
     static volatile int sidePercent = DEFAULT_SIDES;
     static volatile boolean gridMode = false;
-    static volatile int gridStrength = 40;
-    static volatile int gridCell = 4;
+    static volatile int gridStrength = 45;
+    static volatile int gridCell = 3;
+    static volatile int decoyStrength = 35;
+    static volatile boolean gridMoving = true;
     static volatile boolean fourWay = false;
 
     private WindowManager windowManager;
@@ -128,8 +132,10 @@ public class PrivacyService extends Service implements SensorEventListener {
         multiFace = p.getBoolean(KEY_MULTI, true);
         sidePercent = 0;   // no edge shading: the front view stays completely clear
         gridMode = p.getBoolean(KEY_GRID, false);   // experimental, off unless switched on
-        gridStrength = p.getInt(KEY_GRID_STR, 40);
-        gridCell = p.getInt(KEY_GRID_CELL, 4);
+        gridStrength = p.getInt(KEY_GRID_STR, 45);
+        gridCell = p.getInt(KEY_GRID_CELL, 3);
+        decoyStrength = p.getInt(KEY_DECOY, 35);
+        gridMoving = p.getBoolean(KEY_MOVING, true);
         fourWay = p.getBoolean(KEY_FOURWAY, false);
     }
 
@@ -241,7 +247,7 @@ public class PrivacyService extends Service implements SensorEventListener {
             windowManager.updateViewLayout(shade, shadeParams);
         }
         shade.set(a, sa, b, sb, fullV, gridMode ? gridCell : 0, gridStrength / 100f,
-                opaque ? 1f : 1f / TOUCH_ALPHA);
+                decoyStrength / 100f, gridMoving, opaque ? 1f : 1f / TOUCH_ALPHA);
     }
 
     // ---------------------------------------------------------------- face
