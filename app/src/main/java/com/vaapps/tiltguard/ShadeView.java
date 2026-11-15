@@ -39,36 +39,55 @@ public class ShadeView extends View {
     private final int[] colors = new int[N];
 
     private float kx, sx, ky, sy, full;
-    private boolean louvers;
+    private int gridCell = 0;        // 0 = grid off, else mesh pitch in pixels
+    private float gridAlpha = 0f;    // 0..1 darkness of the mesh lines
     private float gain = 1f;
 
     public ShadeView(Context c) {
         super(c);
-        Bitmap tile = Bitmap.createBitmap(3, 1, Bitmap.Config.ARGB_8888);
-        tile.setPixel(0, 0, Color.BLACK);
+    }
+
+    /** Fine black mesh: 1px lines every `cell` pixels, both directions. */
+    private void buildMesh() {
+        if (gridCell <= 0) {
+            linePaint.setShader(null);
+            return;
+        }
+        Bitmap tile = Bitmap.createBitmap(gridCell, gridCell, Bitmap.Config.ARGB_8888);
+        for (int i = 0; i < gridCell; i++) {
+            tile.setPixel(i, 0, Color.BLACK);
+            tile.setPixel(0, i, Color.BLACK);
+        }
         linePaint.setShader(new BitmapShader(tile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT));
+        linePaint.setAlpha((int) (Math.min(1f, gridAlpha) * 255));
     }
 
     /**
      * kx/sx: across the view, ky/sy: down the view. full: black over everything (0..1).
      * gain: multiplies drawn darkness to make up for a see-through window (1 / window alpha).
+     * gridCell/gridAlpha: optional fine mesh over everything (0 cell = off).
      */
-    public void set(float kx, float sx, float ky, float sy, float full, boolean louvers, float gain) {
+    public void set(float kx, float sx, float ky, float sy, float full,
+                    int gridCell, float gridAlpha, float gain) {
         final float e = 0.004f;
         if (Math.abs(kx - this.kx) < e && Math.abs(ky - this.ky) < e
                 && Math.abs(sx - this.sx) < e && Math.abs(sy - this.sy) < e
                 && Math.abs(full - this.full) < e && (full >= 1f) == (this.full >= 1f)
                 && (full <= 0f) == (this.full <= 0f)
-                && louvers == this.louvers && gain == this.gain) {
+                && gridCell == this.gridCell
+                && Math.abs(gridAlpha - this.gridAlpha) < e && gain == this.gain) {
             return;
         }
+        boolean rebuild = gridCell != this.gridCell || Math.abs(gridAlpha - this.gridAlpha) >= e;
         this.kx = kx;
         this.sx = sx;
         this.ky = ky;
         this.sy = sy;
         this.full = full;
-        this.louvers = louvers;
+        this.gridCell = gridCell;
+        this.gridAlpha = gridAlpha;
         this.gain = gain;
+        if (rebuild) buildMesh();
         invalidate();
     }
 
@@ -91,7 +110,7 @@ public class ShadeView extends View {
             gradPaint.setShader(new LinearGradient(0, 0, 0, h, colors, null, Shader.TileMode.CLAMP));
             canvas.drawRect(0, 0, w, h, gradPaint);
         }
-        if (louvers) {
+        if (gridCell > 0) {
             canvas.drawRect(0, 0, w, h, linePaint);
         }
         if (full > 0.001f) {

@@ -140,6 +140,66 @@ public class MainActivity extends Activity {
         hint.setTextSize(13);
         root.addView(hint, matchWidth());
 
+        // ---- experimental grid mode (Eye-Shield-style mesh)
+        Switch gridSw = makeSwitch("Grid mode (experimental): fine mesh that blurs out from a distance", dp);
+        gridSw.setChecked(PrivacyService.gridMode);
+        root.addView(gridSw, matchWidth());
+
+        TextView gridStrLabel = new TextView(this);
+        gridStrLabel.setTextColor(Color.WHITE);
+        gridStrLabel.setTextSize(15);
+        root.addView(gridStrLabel, matchWidth());
+        SeekBar gridStr = new SeekBar(this);
+        gridStr.setMax(60);
+        gridStr.setProgress(Math.max(0, PrivacyService.gridStrength - 10));
+        root.addView(gridStr, matchWidth());
+
+        TextView gridCellLabel = new TextView(this);
+        gridCellLabel.setTextColor(Color.WHITE);
+        gridCellLabel.setTextSize(15);
+        root.addView(gridCellLabel, matchWidth());
+        SeekBar gridCell = new SeekBar(this);
+        gridCell.setMax(8);
+        gridCell.setProgress(Math.max(0, PrivacyService.gridCell - 3));
+        root.addView(gridCell, matchWidth());
+
+        Runnable gridUi = () -> {
+            gridStrLabel.setText("Grid strength: " + PrivacyService.gridStrength + "%");
+            gridCellLabel.setText("Grid spacing: " + PrivacyService.gridCell + " px");
+            int vis = PrivacyService.gridMode ? View.VISIBLE : View.GONE;
+            gridStrLabel.setVisibility(vis);
+            gridStr.setVisibility(vis);
+            gridCellLabel.setVisibility(vis);
+            gridCell.setVisibility(vis);
+        };
+        gridUi.run();
+        gridSw.setOnCheckedChangeListener((b, on) -> {
+            PrivacyService.gridMode = on;
+            getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PrivacyService.KEY_GRID, on).apply();
+            gridUi.run();
+        });
+        SeekBar.OnSeekBarChangeListener gridListener = new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
+                if (sb == gridStr) PrivacyService.gridStrength = p + 10;
+                else PrivacyService.gridCell = p + 3;
+                gridUi.run();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) { }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) {
+                getSharedPreferences(PrivacyService.PREFS, MODE_PRIVATE).edit()
+                        .putInt(PrivacyService.KEY_GRID_STR, PrivacyService.gridStrength)
+                        .putInt(PrivacyService.KEY_GRID_CELL, PrivacyService.gridCell).apply();
+            }
+        };
+        gridStr.setOnSeekBarChangeListener(gridListener);
+        gridCell.setOnSeekBarChangeListener(gridListener);
+
         Switch fourSw = makeSwitch("4-way: also block from above and below", dp);
         fourSw.setChecked(PrivacyService.fourWay);
         fourSw.setOnCheckedChangeListener((b, on) -> {
