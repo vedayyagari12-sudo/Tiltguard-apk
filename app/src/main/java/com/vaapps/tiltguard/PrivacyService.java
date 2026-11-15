@@ -21,6 +21,7 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.provider.Settings;
 import android.service.quicksettings.TileService;
+import android.view.View;
 import android.view.WindowManager;
 import android.content.ComponentName;
 
