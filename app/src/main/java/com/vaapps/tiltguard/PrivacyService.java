@@ -246,8 +246,10 @@ public class PrivacyService extends Service implements SensorEventListener {
             shadeParams.alpha = opaque ? 1f : TOUCH_ALPHA;
             windowManager.updateViewLayout(shade, shadeParams);
         }
+        // Decoy blobs fade in as the screen dims from tilt, and are gone when it's clear.
+        float tiltAmount = Math.min(1f, Math.max(Math.abs(kxDev), Math.abs(kyDev)));
         shade.set(a, sa, b, sb, fullV, gridMode ? gridCell : 0, gridStrength / 100f,
-                decoyStrength / 100f, gridMoving, opaque ? 1f : 1f / TOUCH_ALPHA);
+                decoyStrength / 100f * tiltAmount, gridMoving, opaque ? 1f : 1f / TOUCH_ALPHA);
     }
 
     // ---------------------------------------------------------------- face

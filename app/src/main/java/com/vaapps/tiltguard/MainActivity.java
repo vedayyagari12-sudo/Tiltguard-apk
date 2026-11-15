@@ -192,7 +192,7 @@ public class MainActivity extends Activity {
         Runnable gridUi = () -> {
             gridStrLabel.setText("Mesh strength: " + PrivacyService.gridStrength + "%");
             gridCellLabel.setText("Mesh spacing: " + PrivacyService.gridCell + " px");
-            decoyLabel.setText("Decoy blobs: " + PrivacyService.decoyStrength + "%");
+            decoyLabel.setText("Decoy blobs (appear as it dims): " + PrivacyService.decoyStrength + "%");
             int vis = PrivacyService.gridMode ? View.VISIBLE : View.GONE;
             gridStrLabel.setVisibility(vis);
             gridStr.setVisibility(vis);
